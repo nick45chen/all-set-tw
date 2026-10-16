@@ -1,0 +1,328 @@
+import { describe, expect, it } from "vitest";
+import { calculateAssetSummary } from "./summary";
+import { formatCurrency } from "@/shared/format/financial";
+
+describe("calculateAssetSummary", () => {
+  it("counts credit-card overpayments toward net worth instead of debt", () => {
+    const summary = calculateAssetSummary({
+      bank: {
+        accounts: [
+          {
+            id: "credit",
+            sourceId: "credit",
+            connectorId: "sinopac",
+            accountType: "credit",
+            balance: 137,
+            currency: "TWD",
+          },
+          {
+            id: "debt",
+            sourceId: "debt",
+            connectorId: "esun",
+            accountType: "credit",
+            balance: -1000,
+            currency: "TWD",
+          },
+        ],
+        transactions: [],
+      },
+      investments: [],
+      manualAssets: [],
+      rates: [],
+    });
+    expect(summary.cardDebt).toBe(863);
+    expect(summary.netWorth).toBe(-863);
+    expect(
+      summary.institutionGroups.find((group) => group.cards[0]?.id === "credit")
+        ?.debtTotalTwd,
+    ).toBe(-137);
+  });
+  it("converts balances and groups accounts and cards by institution", () => {
+    const summary = calculateAssetSummary({
+      bank: {
+        accounts: [
+          {
+            id: "deposit",
+            connectorId: "esun",
+            sourceId: "deposit",
+            institutionName: "玉山銀行",
+            bankCode: "808",
+            accountType: "savings",
+            balance: 100,
+            currency: "USD",
+          },
+          {
+            id: "card",
+            connectorId: "esun",
+            sourceId: "card",
+            institutionName: "玉山銀行",
+            bankCode: "808",
+            accountType: "credit",
+            balance: -2_000,
+            currency: "TWD",
+          },
+        ],
+        transactions: [],
+      },
+      investments: [
+        {
+          id: "investment",
+          assetType: "stock",
+          name: "測試持倉",
+          marketValue: 10_000,
+          currency: "TWD",
+          asOfDate: "2026-07-22",
+        },
+      ],
+      manualAssets: [
+        {
+          id: "home",
+          name: "房屋",
+          category: "real_estate",
+          note: null,
+          currency: "USD",
+          createdAt: "2026-07-22",
+          value: 200,
+        },
+      ],
+      rates: [{ currency: "USD", rateTwd: 30, updatedAt: "2026-07-22" }],
+    });
+
+    expect(summary.bankTotal).toBe(3_000);
+    expect(summary.cardDebt).toBe(2_000);
+    expect(summary.netWorth).toBe(17_000);
+    expect(summary.institutionGroups).toHaveLength(1);
+    expect(summary.institutionGroups[0]).toMatchObject({
+      key: "bank:808",
+      institution: "玉山銀行",
+      assetTotalTwd: 3_000,
+      debtTotalTwd: 2_000,
+    });
+    expect(summary.institutionGroups[0]?.accounts).toHaveLength(1);
+    expect(summary.institutionGroups[0]?.cards).toHaveLength(1);
+    expect(summary.missingCurrencies).toEqual([]);
+  });
+
+  it("separates loan debt from deposits and subtracts it from net worth", () => {
+    const summary = calculateAssetSummary({
+      bank: {
+        accounts: [
+          {
+            id: "cash",
+            connectorId: "cathaybk",
+            sourceId: "cash",
+            institutionName: "國泰世華銀行",
+            accountType: "savings",
+            balance: 80_000,
+            currency: "TWD",
+          },
+          {
+            id: "loan",
+            connectorId: "cathaybk",
+            sourceId: "loan",
+            institutionName: "國泰世華銀行",
+            accountType: "loan",
+            loanCategory: "housing",
+            loanInterestRate: 1.8,
+            balance: -50_000,
+            currency: "TWD",
+            loanPaymentAmount: 12_000,
+            loanInstallmentsPaid: 10,
+            loanInstallmentsTotal: 240,
+          },
+          {
+            id: "personal-loan",
+            connectorId: "sinopac",
+            sourceId: "loan:sinopac:test",
+            institutionName: "永豐銀行",
+            accountType: "loan",
+            loanCategory: "personal",
+            balance: -10_000,
+            currency: "TWD",
+          },
+        ],
+        transactions: [],
+      },
+      investments: [],
+      manualAssets: [],
+      rates: [],
+    });
+
+    expect(summary.bankTotal).toBe(80_000);
+    expect(summary.loanDebt).toBe(60_000);
+    expect(summary.netWorth).toBe(20_000);
+    expect(summary.institutionGroups).toHaveLength(2);
+    const cathayGroup = summary.institutionGroups.find(
+      (group) => group.key === "bank:013",
+    );
+    const sinopacGroup = summary.institutionGroups.find(
+      (group) => group.key === "bank:807",
+    );
+    expect(cathayGroup).toMatchObject({
+      accounts: [{ id: "cash" }],
+      loans: [{ id: "loan" }],
+      loanDebtTotalTwd: 50_000,
+      loanCategoryTotals: { housing: 50_000, personal: 0, other: 0 },
+    });
+    expect(sinopacGroup).toMatchObject({
+      loans: [{ id: "personal-loan" }],
+      loanDebtTotalTwd: 10_000,
+      loanCategoryTotals: { housing: 0, personal: 10_000, other: 0 },
+    });
+  });
+
+  it("includes loan currencies in missing exchange-rate warnings", () => {
+    const summary = calculateAssetSummary({
+      bank: {
+        accounts: [
+          {
+            id: "foreign-loan",
+            connectorId: "cathaybk",
+            sourceId: "foreign-loan",
+            accountType: "loan",
+            balance: -100_000,
+            currency: "EUR",
+          },
+        ],
+        transactions: [],
+      },
+      investments: [],
+      manualAssets: [],
+      rates: [],
+    });
+
+    expect(summary.missingCurrencies).toEqual(["EUR"]);
+  });
+
+  it("keeps a card overpayment separate from loan debt for a shared institution", () => {
+    const summary = calculateAssetSummary({
+      bank: {
+        accounts: [
+          {
+            id: "overpaid-card",
+            connectorId: "cathaybk",
+            sourceId: "overpaid-card",
+            institutionName: "國泰世華銀行",
+            accountType: "credit",
+            balance: 137,
+            currency: "TWD",
+          },
+          {
+            id: "loan",
+            connectorId: "cathaybk",
+            sourceId: "loan",
+            institutionName: "國泰世華銀行",
+            accountType: "loan",
+            balance: -50_000,
+            currency: "TWD",
+          },
+        ],
+        transactions: [],
+      },
+      investments: [],
+      manualAssets: [],
+      rates: [],
+    });
+
+    expect(summary.institutionGroups[0]).toMatchObject({
+      cards: [{ id: "overpaid-card" }],
+      debtTotalTwd: -137,
+      loans: [{ id: "loan" }],
+      loanDebtTotalTwd: 50_000,
+    });
+  });
+
+  it("reports currencies omitted from TWD totals when exchange rates are missing", () => {
+    const summary = calculateAssetSummary({
+      bank: {
+        accounts: [
+          {
+            id: "foreign",
+            connectorId: "obank",
+            sourceId: "foreign",
+            accountType: "savings",
+            balance: 100,
+            currency: "USD",
+          },
+        ],
+        transactions: [],
+      },
+      investments: [],
+      manualAssets: [
+        {
+          id: "yen",
+          name: "日圓資產",
+          category: "other",
+          note: null,
+          currency: "JPY",
+          createdAt: "2026-08-09",
+          value: 10_000,
+        },
+      ],
+      rates: [],
+    });
+
+    expect(summary.grossAssets).toBe(0);
+    expect(summary.missingCurrencies).toEqual(["JPY", "USD"]);
+  });
+
+  it.each([
+    { amount: 0, missingCurrencies: [] },
+    { amount: 0.03, missingCurrencies: ["AUD", "CHF", "GBP", "HKD"] },
+    { amount: 1, missingCurrencies: ["AUD", "CHF", "GBP", "HKD"] },
+  ])(
+    "reports missing rates for actual nonzero foreign amounts ($amount)",
+    ({ amount, missingCurrencies }) => {
+      const summary = calculateAssetSummary({
+        bank: {
+          accounts: [
+            {
+              id: "foreign",
+              connectorId: "obank",
+              sourceId: "foreign",
+              accountType: "savings",
+              balance: amount,
+              currency: "HKD",
+            },
+            {
+              id: "card",
+              connectorId: "esun",
+              sourceId: "card",
+              accountType: "credit",
+              balance: -amount,
+              currency: "CHF",
+            },
+          ],
+          transactions: [],
+        },
+        investments: [
+          {
+            id: "investment",
+            assetType: "stock",
+            name: "外幣持倉",
+            marketValue: 0,
+            cashBalance: amount,
+            currency: "GBP",
+            asOfDate: "2026-10-08",
+          },
+        ],
+        manualAssets: [
+          {
+            id: "manual",
+            name: "外幣資產",
+            category: "other",
+            note: null,
+            currency: "AUD",
+            createdAt: "2026-10-08",
+            value: amount,
+          },
+        ],
+        rates: [],
+      });
+
+      expect(summary.netWorth).toBe(0);
+      expect(summary.missingCurrencies).toEqual(missingCurrencies);
+      expect(formatCurrency(amount, "HKD")).toBe(`HKD ${amount}`);
+    },
+  );
+});

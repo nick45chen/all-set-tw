@@ -1,0 +1,41 @@
+name = "taiwan-fin-hub"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+
+assets = { directory = "../web/dist", binding = "ASSETS" }
+browser = { binding = "BROWSER" }
+ai = { binding = "AI", remote = true }
+
+[[durable_objects.bindings]]
+name = "MEGABANK_EGRESS"
+class_name = "MegabankEgress"
+
+[[durable_objects.bindings]]
+name = "FUBON_EGRESS"
+class_name = "FubonEgress"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MegabankEgress"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["FubonEgress"]
+
+[[queues.producers]]
+binding = "SYNC_QUEUE"
+queue = "taiwan-fin-hub-sync"
+
+[[queues.consumers]]
+queue = "taiwan-fin-hub-sync"
+max_batch_size = 1
+max_batch_timeout = 1
+max_concurrency = 1
+
+[[d1_databases]]
+binding = "DB"
+database_name = "taiwan-fin-hub"
+database_id = "<YOUR_D1_DATABASE_ID>"
+remote = true
+migrations_dir = "migrations"

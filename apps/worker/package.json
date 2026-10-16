@@ -1,0 +1,37 @@
+{
+  "name": "@taiwan-fin-hub/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node ../../node_modules/@typescript/native/bin/tsc -p tsconfig.json",
+    "typecheck": "node ../../node_modules/@typescript/native/bin/tsc -p tsconfig.json",
+    "test": "vitest run tests",
+    "dev": "npm run db:migrate:local && node ../../scripts/dev-worker.mjs",
+    "dev:remote": "XDG_CONFIG_HOME=../../.wrangler-config wrangler dev -c ../../wrangler.toml --remote",
+    "deploy": "npm run build -w @taiwan-fin-hub/web && npm run db:migrate:remote && XDG_CONFIG_HOME=../../.wrangler-config node ../../scripts/deploy-with-vapid.mjs -c ../../wrangler.toml",
+    "db:migrate:local": "XDG_CONFIG_HOME=../../.wrangler-config wrangler d1 migrations apply DB --local -c wrangler.local.toml",
+    "db:migrate:remote": "XDG_CONFIG_HOME=../../.wrangler-config wrangler d1 migrations apply DB --remote -c ../../wrangler.toml"
+  },
+  "dependencies": {
+    "@cloudflare/puppeteer": "^1.4.0",
+    "@hono/zod-validator": "^0.9.1",
+    "@taiwan-fin-hub/shared": "0.1.0",
+    "drizzle-orm": "0.45.3",
+    "hono": "^4.13.9",
+    "jpeg-js": "^0.4.4",
+    "node-forge": "^1.4.0",
+    "web-push": "^3.6.7",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260924.1",
+    "@types/jsdom": "^30.0.0",
+    "@types/node-forge": "^1.3.14",
+    "@types/web-push": "^3.6.4",
+    "jsdom": "^30.1.2",
+    "miniflare": "5.20261006.1-alpha",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.149.0"
+  }
+}

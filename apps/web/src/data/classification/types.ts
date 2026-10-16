@@ -1,0 +1,4 @@
+export type {
+  ClassificationCategoryResponse as ClassificationCategoryRow,
+  ClassificationRuleResponse as ClassificationRuleRow,
+} from "@taiwan-fin-hub/shared";

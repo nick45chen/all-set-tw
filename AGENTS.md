@@ -1,0 +1,92 @@
+# Taiwan Fin Hub 專案指引
+
+## 專案概況
+
+- 本專案是使用 TypeScript ESM 與 npm workspaces 管理的 monorepo。前後端與共用套件皆使用 TS7 型別檢查；前端透過 `svelte-check --tsgo` 執行，並保留其所需的 TS6 相依。
+- 前端位於 `apps/web`，使用 Svelte 5、Vite、Tailwind CSS 4 與 TanStack Svelte Query。
+- 後端位於 `apps/worker`，執行於 Cloudflare Workers，使用 Hono 提供 API、Zod 4 驗證外部輸入。
+- npm workspaces 僅包含 Web、Worker 與根目錄的 `shared/`；資料庫與連接器由 Worker 管理。
+- 資料庫使用 Cloudflare D1；schema 變更由 `apps/worker/migrations` 管理。
+- 身分驗證使用 Cloudflare Access，由 Worker 驗證 Access JWT。
+- 需要瀏覽器操作的銀行連接器使用 Cloudflare Browser Rendering 與 Puppeteer。
+- 驗證碼辨識使用 Cloudflare Workers AI。
+- 排程同步使用 Workers Cron Triggers 啟動 Cloudflare Queue，並以 D1 sync jobs
+  逐一執行 connector；每個 connector 使用獨立的 Queue consumer invocation。
+
+## 文字與 Review 規範
+
+- Code review、PR review comment、審查摘要與修改建議一律使用正體中文；必要的技術名詞、程式碼與指令可保留英文。
+
+## 目錄責任
+
+- `apps/web`：Svelte 前端、頁面、元件、資料查詢與前端測試。
+- `apps/web/src/app`：前端 Composition Root、導覽、全域 providers 與應用層型別。
+- `apps/web/src/data`：依 API resource 組織的 query options 與前端 response DTO。
+- `apps/web/src/features`：依使用者功能組織的頁面、feature 元件與純商業顯示邏輯。
+- `apps/web/src/shared`：跨 feature 共用的 UI、API client、格式化、state 與 actions。
+- `apps/worker`：Hono API、同步流程、Cloudflare bindings 與靜態網站服務。
+- `apps/worker/src/features`：依業務功能組織的後端 vertical slices。
+- `apps/worker/src/features/sync`：手動同步入口與共用 lock、設定、資料寫入；手動協調位於 `manual-sync.ts`。
+- `apps/worker/src/features/sync/scheduling`：排程設定、到期工作選取、Queue dispatch 與預設排程批次。
+- `apps/worker/src/features/sync/reports`：同步報告 API、金融快照與活動變化明細。
+- `apps/worker/src/sources/<connectorId>`：依資料來源集中 `sync.ts`、connector、protocol、client 與專用配對／修復；電子發票與集保在此管理 Queue 分段同步與 `run-repository.ts`。
+- `apps/worker/src/sources` 根目錄：跨來源共用的 browser 工具、設定 registry、純型別與同步回溯 policy。來源的 protocol／client 不依賴 Hono、D1、Worker `Env` 或同步流程。
+- `apps/worker/src/db`：跨後端 feature 共用的 D1 基礎能力與 Drizzle schema／client。
+- `apps/worker/migrations`、`apps/worker/schema-metadata.json`、`apps/worker/seeds`：資料庫遷移、schema 文件語意與 Demo 種子資料。
+- 根目錄 `shared/`：前後端共用的穩定型別、契約與純活動處理邏輯，一律從 `@taiwan-fin-hub/shared` 的 `index.ts` 引用；只有 Worker 使用的型別不放這裡。
+- `shared/api/`：依 API resource 分檔的 HTTP 契約（`errors`、`bank`、`sync`、`sync-reports`、`connectors`、`classification`、`notifications`、`dashboard`）；前端引用，Worker 在驗證與 JSON 回傳處檢查。`errors.ts` 是 Worker 會回傳的全部錯誤代碼。
+- `shared/activity/`：活動配對、去重、排序與資料組裝的純邏輯；`shared/connector-catalog.ts` 是資料來源 catalog。
+- `apps/worker/src/sources/types.ts`、`financial-types.ts`：僅後端使用的 `Connector`／`SyncResult` 與 connector 正規化金融資料型別。
+- `docs/002-backend-architecture.md`：後端分層、相依方向與維護約定的詳細文件。
+- `docs/003-frontend-architecture.md`：前端分層、相依方向與測試 colocate 約定。
+- `docs/004-connector-development.md`：Connector catalog、連接模式、敏感狀態與新增流程規範。
+
+## 架構約定
+
+- 後端採 feature-oriented Vertical Slice Architecture。
+- `apps/worker/src/index.ts` 是 Composition Root，只負責 middleware、routes、錯誤處理、靜態資源與 scheduled event 的組裝。
+- HTTP concerns 放在 `route.ts`，use case 與商業流程放在 `service.ts`，feature 專用資料存取放在 `repository.ts`；一般 CRUD 預設使用 Drizzle。
+- 共用 API contract 放在根目錄的 `shared/`，不得混入 Hono `Context`、D1 row 或 Puppeteer object。
+- 前端採 feature-first 結構；`features` 可依賴 `data` 與 `shared`，`data`、`shared` 不得反向依賴 feature。
+- 前端金融計算測試與實作 colocate；主要操作流程的 Playwright tests 放在 `apps/web/e2e`。
+- 自動測試只保留金融數字、資料完整性、憑證／授權與主要操作流程四類核心保障；優先擴充既有案例，不要求每個功能、函式或分層都有測試，也不維護獨立 self-check。詳細原則見後端文件的「測試與驗證」。
+- 修改前依下方「文件閱讀與維護」對照表閱讀相關文件。
+
+## 常用驗證指令
+
+- 全部格式化：`npm run format`
+- 全部格式檢查：`npm run format:check`
+- 全部型別檢查：`npm run typecheck`
+- 前端驗證：`npm run verify:web`
+- 後端測試：`npm run test:backend`
+- 全部 workspace 建置：`npm run build`
+
+## 提交與 PR 前必跑檢查
+
+每次 commit 或開／更新 PR 前，必須從 **repo root** 跑與 CI 相同的檢查，不得省略。
+
+- 先跑 `npm run format:check`，再跑 `npm run typecheck`，然後跑此次變更適用的 `npm run test:backend` 或前端 unit tests。
+- **禁止**用 `prettier --check <touched files>` 代替 `npm run format:check`。只對改動檔跑 Prettier 通過，不算完成。
+- CI（`.github/workflows/ci.yml`）順序為 `format:check` → `typecheck` → `test:backend` → `test:unit` → `build`。在本地通過前三項中適用的檢查之前，不得視為 commit 完成。
+
+## 文件閱讀與維護
+
+開始修改前，依任務範圍閱讀下表文件的相關章節；跨領域變更須涵蓋所有涉及的文件，不必每次讀完整個 `docs/`。
+
+| 涉及的變更                              | 修改前閱讀，描述受影響時同步更新                                |
+| --------------------------------------- | --------------------------------------------------------------- |
+| 後端架構、同步、Queue、排程             | `docs/002-backend-architecture.md`                              |
+| 前端結構、資料查詢、共用元件            | `docs/003-frontend-architecture.md`                             |
+| 連接器、登入、驗證碼、資料正規化        | `docs/004-connector-development.md`；涉及同步流程時也讀後端架構 |
+| 部署、自動更新、環境變數                | `docs/005-deployment.md`、`README.md` 對應章節                  |
+| 資料庫 schema                           | `docs/database-schema.md`、相關 `apps/worker/migrations/*.sql`  |
+| Drizzle schema、client、repository 轉換 | `docs/002-backend-architecture.md`                              |
+| 使用方式、支援資料來源、限制            | `README.md` 對應章節                                            |
+
+- 若變更使文件描述不再正確，必須在同一個 PR 更新相關文件；純重構且不影響文件描述時，不必為了更新而更新。
+- Schema 變更須同步維護 `apps/worker/schema-metadata.json`，並從 repo root 執行 `npm run db:schema:docs`，提交重新產生的 `docs/database-schema.md`；不得直接手改產生的文件。
+- 提交前對照 diff 檢查文件是否仍符合實作。PR 說明須列出文件更新項目；不需更新其他文件時，簡述原因。
+- `docs/001-cron-sync-design.md` 是歷史設計，不作為現行實作依據；現行排程與同步行為維護於 `docs/002-backend-architecture.md`。
+- 架構判斷以實際程式碼及各 workspace 的 `package.json` 為最終依據。
+- 技術棧、目錄責任或主要驗證指令改變時，應同步更新本文件。
+- `README.md` 用於產品介紹、部署與使用說明；本文件維持精簡，作為開發工作的快速架構索引。
