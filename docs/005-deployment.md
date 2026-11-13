@@ -171,51 +171,39 @@ Cloudflare Access 預設可能使用 Email OTP。如要限定 Cloudflare 帳號�
 
 要讓 Codex、ChatGPT 等 AI 助理透過 `/mcp` 查詢資料，需在保護此 Worker 的 Application 開啟 **Managed OAuth**。開啟後，未登入的非瀏覽器請求會收到 `401` 而非轉址；網頁版登入方式不變。完整設定與各助理的連線步驟見 [AI 助理連線（MCP）](006-mcp.md)。
 
-## 自動更新
+## 自動更新（此 fork 採人工審查）
 
-Deploy to Cloudflare 建立的新 repository 不會包含本專案的 `.github/workflows`，需要一次性安裝更新 workflow。
-
-### 從 GitHub 網頁安裝
-
-1. 在部署 repository 開啟 [`deploy/github/sync-upstream.yml`](../deploy/github/sync-upstream.yml)，點擊 **Raw** 並複製內容。
-2. 回到 repository 首頁，選擇 **Add file → Create new file**。
-3. 建立 `.github/workflows/sync-upstream.yml`，貼上內容並 commit 至 `main`。
-4. 前往 **Settings → Actions → General → Workflow permissions**，允許 GitHub Actions 寫入 repository。
-
-### 從本機安裝
-
-```bash
-mkdir -p .github/workflows
-cp deploy/github/sync-upstream.yml .github/workflows/sync-upstream.yml
-git add .github/workflows/sync-upstream.yml
-git commit -m "啟用版本自動更新"
-git push
-```
-
-完成後可從 **Actions → Sync Latest Version → Run workflow** 手動更新，也會在每天台灣時間 **04:15** 自動執行。
+`nick45chen/all-set-tw` 的 **Review Upstream Updates** 每天台灣時間 **04:15** 檢查上游，也可在 Actions 手動執行。與原專案的直接部署模式不同，此 fork 只建立更新 PR。
 
 ### 更新如何運作
 
-workflow 會：
+1. 從已審查的 `main` 複製同步程式到 runner 暫存位置，再切換至 `codex/upstream-update`。不會執行候選分支中尚未審查的新版同步程式，也不從上游下載可執行 updater 作 fallback。
+2. 沿用原本的三方合併與 `Taiwan-Fin-Hub-Upstream` 基準紀錄，保留 fork 的 workflows。有衝突就停止，正式 main 不受影響。
+3. 只推送候選分支，建立或更新同一張 PR；沒有內容差異時不建立空 PR。候選分支以正常 fast-forward／merge 更新，不 force push。
+4. 在獨立的 read-only 工作 checkout 確切候選 SHA，執行格式、lint、型別、後端與前端測試及 build。不提供 Cloudflare、金融或其他正式環境 secrets；checkout 不保留 Git credentials。
+5. Nick 檢視完整差異及檢查結果，手動以 **Create a merge commit** 合併 PR。不要開啟 auto-merge；不要用 squash 或 rebase 合併而遺失同步基準 commit。
+6. 合併 main 後由 Cloudflare Workers Builds 正式部署，沿用原 Worker、D1 與 Secrets。Cloudflare production branch 維持 main，Preview builds 保持關閉，候選分支不部署。
 
-1. 取得 `TedLin1993/all-set-tw` 的最新 `main`。
-2. 以前次同步版本為基準進行三方合併。
-3. 保留部署 repository 自己的 `.github/workflows`。
-4. 有新版本時推送至 `main`，由 Workers Builds 重新部署。
+原本的 `scripts/sync-upstream.mjs` 仍支援直接推送模式；此 fork 的 workflow 明確將 `SYNC_TARGET_BRANCH` 設為候選分支。不要在正式分支直接執行舊 updater 命令，也不要將舊版同步 workflow 覆蓋回來。
 
-首次同步若沒有共同 Git history，更新器只會在部署內容可對應到上游版本、且 workflows 以外沒有自行修改時接軌。同步前會建立 `backup-before-first-upstream-sync` branch；同名 branch 已存在時不會覆寫。
+### 一次性權限與維護
 
-後續同步會在 commit message 記錄上游基準，不使用 force push。若本地修改與上游衝突，更新器會在推送前停止，保留目前內容供手動處理。
+- 本次設定變更本身也透過 PR 等 Nick 手動合併；舊 `Sync Latest Version` 已停用。合併後移除舊 `sync-upstream.yml`，新增 `review-upstream.yml`，新 workflow 依 GitHub 的排程／手動執行入口運作，不必重新啟用舊流程。
+
+- 在 **Settings → Actions → General → Workflow permissions** 允許 Actions 建立 Pull Requests（介面文字為 Allow GitHub Actions to create and approve pull requests）。此 workflow 只建立／更新 PR，不呼叫 approve 或 merge。
+- repository 預設 token 權限維持 read-only；只有準備 PR 的工作有 contents／pull-requests write，候選檢查工作只有 contents read。repo 的 auto-merge 維持停用。
+- [`deploy/github/review-upstream.yml`](../deploy/github/review-upstream.yml) 與已安裝 workflow 保持一致。此範本只在 `nick45chen/all-set-tw` 的 main 執行。
+- GitHub 不會讓 `GITHUB_TOKEN` 產生的 push／PR 自動觸發一般 CI，因此候選檢查直接作為同一個同步 workflow 的獨立工作執行；審查時查看 **Review Upstream Updates** 的結果與 PR 內記載的候選 SHA。
+- 上游 workflow 的修正不會自動替換本 fork 的審查機制，需另外檢視後手動更新。
 
 ### 更新故障排查
 
-- **Workflow 沒有執行**：確認檔案位於 `.github/workflows/sync-upstream.yml`，並檢查 Actions 是否啟用。
-- **無法推送更新**：確認 Workflow permissions 允許寫入 repository。
-- **合併衝突**：從該次 Actions log 查看衝突檔案，手動合併後再重新執行。
-- **`fatal: refusing to merge unrelated histories`**：部署 repository 仍在使用舊版 workflow，請重新複製最新的 [`deploy/github/sync-upstream.yml`](../deploy/github/sync-upstream.yml)。
-- **Queue 權限錯誤**：替 Workers Builds API token 增加帳戶層級的 Queues Read 與 Queues Edit。
-
-更新流程會保留部署 repository 目前安裝的 workflow，因此上游若修正更新流程，仍需手動替換 workflow 檔案。
+- **Workflow 未執行**：確認 Actions 及 Review Upstream Updates 已啟用，手動執行分支必須是 main。
+- **無法建立 PR**：確認 repository 允許 Actions 建立 PR；不需要為此新增個人 PAT 或 Cloudflare token。
+- **合併衝突**：從 Actions log 查看衝突檔案。保留正式 main，手動處理候選分支後重新檢查。
+- **PR 檢查失敗**：先查看該次 workflow 的 Validate upstream candidate。不要因 PR 已建立就認為檢查已通過。
+- **候選分支觸發部署**：在 Cloudflare Worker → Settings → Builds → Branch control 確認 production branch 是 main，並關閉 Preview builds；`wrangler.toml` 的 `preview_urls = false` 本身不會停用分支建置。
+- **同步後再次出現相同上游差異**：確認前次合併保留了 `Taiwan-Fin-Hub-Upstream` commit，未將其 squash 掉。
 
 ## 組建版本資訊
 
