@@ -123,22 +123,17 @@
 
 部署與登入故障排查及自動更新原理，請參考[進階部署與更新](docs/005-deployment.md)。
 
-## 自動更新
+## 自動更新（審查後部署）
 
-Cloudflare 的 Deploy to Cloudflare 流程目前不會將 `.github/workflows` 複製到新 repository，因此首次部署可以正常使用，但需要完成下方的一次性設定才會啟用版本更新。
+此 fork 使用 **Review Upstream Updates**，每天台灣時間 **04:15** 檢查 `TedLin1993/all-set-tw` 的更新，也可從 Actions → Review Upstream Updates → Run workflow 手動執行。
 
-### 一次性啟用更新功能
+有新版本時，workflow 只更新 `codex/upstream-update` 候選分支，並建立或更新同一張 PR；沒有差異就不建立空 PR。程式碼衝突會停止，不會更新正式 `main`。候選版本會在沒有正式環境金鑰、只有 repository 讀取權限的獨立工作中跑檢查。
 
-不需要修改程式碼，可直接在 GitHub 網頁完成：
+請先審查 PR 的完整差異與檢查結果，再手動使用 **Create a merge commit** 合併至 `main`，保留同步基準紀錄。Cloudflare Workers Builds 只部署 `main`，Preview builds 保持關閉；建立或更新候選 PR 不會部署。此流程不會自動核准或合併 PR。
 
-1. 在你的部署 repository 開啟 [`deploy/github/sync-upstream.yml`](deploy/github/sync-upstream.yml)，點擊 **Raw** 並複製完整內容
-2. 回到 repository 首頁，選擇 **Add file → Create new file**
-3. 將檔名設為 `.github/workflows/sync-upstream.yml`，貼上剛才複製的內容並 commit 至 `main`
-4. 前往 **Settings → Actions → General → Workflow permissions**，確認已允許 GitHub Actions 讀寫 repository 內容
+GitHub 的 **Settings → Actions → General → Workflow permissions** 需允許 Actions 建立 Pull Requests；repository 的預設 token 權限可維持 read-only，workflow 只在準備 PR 的工作宣告必要寫入權限。此 fork 的範本在 [`deploy/github/review-upstream.yml`](deploy/github/review-upstream.yml)，不應以舊版直接推送 `main` 的範本覆蓋。
 
-完成一次性設定後，可以前往部署 repository 的 **Actions → Sync Latest Version → Run workflow**，點擊 **Run workflow** 立即更新。workflow 也會在每天台灣時間 **04:15** 自動執行。
-
-每次執行會取得最新版本、進行安全三方合併，並由 Cloudflare Workers Builds 重新部署。若你修改過程式碼並與上游發生衝突，workflow 會停止且不會推送；請從 Actions 紀錄查看衝突並手動處理。首次同步、備份 branch 與舊版 workflow 的排查方式請參考[進階部署與更新](docs/005-deployment.md)。
+首次同步、合併方式與故障排查見[進階部署與更新](docs/005-deployment.md)。
 
 ## 本機開發
 

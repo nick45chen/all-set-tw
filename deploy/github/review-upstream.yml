@@ -1,0 +1,117 @@
+name: Review Upstream Updates
+
+on:
+  schedule:
+    # 台灣時間每天 04:15；只準備 PR，不更新正式 main。
+    - cron: "15 20 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'nick45chen/all-set-tw' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      candidate: ${{ steps.review.outputs.candidate }}
+    steps:
+      - name: Checkout reviewed main
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Prepare or update upstream review PR
+        id: review
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          update_branch=codex/upstream-update
+          git config user.name "taiwan-fin-hub-updater"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # 候選分支可能包含尚未審查的 updater；只執行 main 的受信任副本。
+          updater="$RUNNER_TEMP/reviewed-sync-upstream.mjs"
+          cp scripts/sync-upstream.mjs "$updater"
+          git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
+
+          if git ls-remote --exit-code --heads origin "refs/heads/$update_branch" > "$RUNNER_TEMP/update-branch-ref"; then
+            git fetch --no-tags origin "refs/heads/$update_branch:refs/remotes/origin/$update_branch"
+            git switch --create "$update_branch" --track "origin/$update_branch"
+            git merge --no-edit origin/main
+          else
+            status=$?
+            if [ "$status" -ne 2 ]; then
+              exit "$status"
+            fi
+            git switch --create "$update_branch" origin/main
+          fi
+
+          SYNC_TARGET_BRANCH="$update_branch" node "$updater"
+
+          if git diff --quiet origin/main HEAD --; then
+            echo "上游內容已同步，沒有需要審查的差異；不建立空 PR。"
+            exit 0
+          fi
+
+          # updater 與此處均只可推送候選分支，永遠不推 main。
+          git push origin "HEAD:refs/heads/$update_branch"
+          candidate=$(git rev-parse HEAD)
+          upstream=$(git rev-parse upstream/main)
+          printf 'candidate=%s\n' "$candidate" >> "$GITHUB_OUTPUT"
+
+          body="$RUNNER_TEMP/upstream-review.md"
+          {
+            printf '%s\n' '此 PR 整合上游更新，等待 Nick 審查後手動合併。'
+            printf '\n上游版本：`%s`\n候選版本：`%s`\n' "$upstream" "$candidate"
+            printf '\n%s\n' '請檢查帳密處理、對外請求、相依套件、部署腳本及資料庫 migrations。'
+            printf '%s\n' '合併請使用 Create a merge commit，保留同步基準紀錄；不要啟用 auto-merge。'
+            printf '%s\n' '候選分支不部署到 Cloudflare。合併 main 後才會觸發正式部署。'
+            printf '\nTaiwan-Fin-Hub-Upstream: %s\n' "$upstream"
+          } > "$body"
+
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --head "$update_branch" --state open --json url --jq '.[0].url // empty')
+          if [ -n "$pr" ]; then
+            gh pr edit "$pr" --repo "$GITHUB_REPOSITORY" --body-file "$body"
+          else
+            gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$update_branch" --title "chore: 上游版本更新（待人工審查）" --body-file "$body"
+          fi
+
+  validate:
+    name: Validate upstream candidate
+    needs: sync
+    if: needs.sync.outputs.candidate != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact candidate without persisted credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.sync.outputs.candidate }}
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test:backend
+      - run: npm run test:unit
+      - run: npm run build
